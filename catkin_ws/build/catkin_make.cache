@@ -1,0 +1,2 @@
+ivr_assignment/ivr_assignment-master
+-DCATKIN_DEVEL_PREFIX=/home/kerim/catkin_ws/devel -DCMAKE_INSTALL_PREFIX=/home/kerim/catkin_ws/install -G Unix Makefiles
