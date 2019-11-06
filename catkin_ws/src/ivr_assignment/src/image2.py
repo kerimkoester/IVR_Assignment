@@ -101,8 +101,31 @@ class image_converter:
   def callbackmaster(self,data):
     pos_cam1 = self.get_projection(data.data,0.43,5/134.)
     pos_cam2 = self.get_projection(self.blob_pos2.data,0.3,5/132.)
-    print(pos_cam1)
-    print(pos_cam2)
+    def rotx(alpha):
+        return np.array([[1,0,0,0],
+                                        [0,np.cos(alpha),-np.sin(alpha),0],
+                                        [0,np.sin(alpha),np.cos(alpha),0],
+                                        [0,0,0,1]])
+    def rotz(alpha):
+        return np.array([  [np.cos(alpha),-np.sin(alpha),0,0],
+                                        [np.sin(alpha),np.cos(alpha),0,0],
+                                        [0,0,1,0],
+                                        [0,0,0,1]])
+    def trans_x(a):
+        return np.array([[1,0,0,0],
+                                     [0,1,0,0],
+                                     [0,0,1,a],
+                                     [0,0,0,1]])
+    def trans(alpha,d,theta):
+        return rotz(theta).dot(trans_x(d).dot(rotx(alpha)))
+    
+    def trans_tot(theta1,theta2,theta3):
+        return trans(-np.pi/2,2,theta1).dot(trans(np.pi/2,0,theta2).dot(trans(np.pi/2,3,theta3)))
+    
+    print("transmat: ",trans_tot(0,0,0)[:,3])
+        
+    print("y,z: ",pos_cam1)
+    print("x,z: ",pos_cam2)
 
 # call the class
 def main(args):
