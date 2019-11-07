@@ -9,6 +9,7 @@ from std_msgs.msg import String
 from sensor_msgs.msg import Image
 from std_msgs.msg import Float64MultiArray, Float64
 from cv_bridge import CvBridge, CvBridgeError
+from scipy.optimize import fsolve
 
 
 class image_converter:
@@ -24,10 +25,16 @@ class image_converter:
     self.image1_sub = rospy.Subscriber("/camera1/blob_pos",Float64MultiArray,self.callbackmaster)
     # initialize a publisher to publish position of blobs
     self.blob_pub2 = rospy.Publisher("/camera2/blob_pos",Float64MultiArray, queue_size=10)
+    # initialize a publisher to send joints' angular position to the robot
+    self.robot_joint1_pub = rospy.Publisher("/robot/joint1_position_controller/command", Float64, queue_size=10)
+    self.robot_joint2_pub = rospy.Publisher("/robot/joint2_position_controller/command", Float64, queue_size=10)
+    self.robot_joint3_pub = rospy.Publisher("/robot/joint3_position_controller/command", Float64, queue_size=10)
     # initialize the bridge between openCV and ROS
     self.bridge = CvBridge()
     #scale (projection in plane parallel to camera through yellow blob) determined for all angles=0
     
+
+  #___________________detection of the blobs__________________________
   def detect_red(self,image):
       # Isolate the blue colour in the image as a binary image
       mask = cv2.inRange(image, (0, 0, 100), (0, 0, 255))
@@ -71,6 +78,7 @@ class image_converter:
       cy = int(M['m01'] / M['m00'])
       return np.array([cx, cy])
 
+  #______________get the projection from published blob data______________
   def get_projection(self,blobs,r_yellow,scale):
     pos_cam = np.array(blobs).reshape((4,2))
     pos_cam = scale*pos_cam
@@ -78,7 +86,22 @@ class image_converter:
     pos_cam = pos_cam-pos_cam[0]
     pos_cam[:,1]=-pos_cam[:,1]
     return pos_cam
-  # Recieve data, process it, and publish
+
+  #__________________matrix calculation for green blob __________________
+  #position of green blob is x,y,z without rotation around z axis (yellow blob) and then
+  #rotated by a rotation matrix around z: rot_z(theta1)*xyz(theta2,theta3)
+  def pos_green_blob(self,theta1,theta2,theta3):
+    x = 3*np.sin(theta3)
+    y = -3*np.sin(theta2)*np.cos(theta3)
+    z = 2+3*np.cos(theta2)*np.cos(theta3)
+    rot = np.array([[np.cos(theta1),-np.sin(theta1),0],
+    		[np.sin(theta1),np.cos(theta1),0],
+    		[0,0,1]])
+
+    return rot.dot(np.array([x,y,z]))
+
+
+  # _______________Recieve data, process it, and publish______________________
   def callback2(self,data):
     # Recieve the image
     try:
@@ -97,49 +120,49 @@ class image_converter:
       self.blob_pub2.publish(self.blob_pos2)
     except CvBridgeError as e:
       print(e)
-      
+
+
+
+  #_________________________combine both images____________________________
   def callbackmaster(self,data):
+    #save the projection into a matrix
     pos_cam1 = self.get_projection(data.data,0.43,5/134.)
     pos_cam2 = self.get_projection(self.blob_pos2.data,0.3,5/132.)
-    def rotx(alpha):
-        return np.array([[1,0,0,0],
-                                        [0,np.cos(alpha),-np.sin(alpha),0],
-                                        [0,np.sin(alpha),np.cos(alpha),0],
-                                        [0,0,0,1]])
-    def rotz(alpha):
-        return np.array([  [np.cos(alpha),-np.sin(alpha),0,0],
-                                        [np.sin(alpha),np.cos(alpha),0,0],
-                                        [0,0,1,0],
-                                        [0,0,0,1]])
-    def trans_x(a):
-        return np.array([[1,0,0,0],
-                                     [0,1,0,0],
-                                     [0,0,1,a],
-                                     [0,0,0,1]])
-    def trans(alpha,d,theta):
-        return rotz(theta).dot(trans_x(d).dot(rotx(alpha)))
+
+    #get the three-dimensional point vector of the green blob
+    x_measured = np.array([pos_cam2[2,0],pos_cam1[2,0],pos_cam2[2,1]]) #x,y,z coordinates from different cameras
+
+    #define the function for fsolve (numerical solver for the angles given the measured position of the green blob)
+    def function_for_fsolve(theta):
+	return np.array([3*(np.cos(theta[0])*np.sin(theta[2])+np.sin(theta[0])*np.sin(theta[1])*np.cos(theta[2]))-x_measured[0],
+			3*(np.sin(theta[0])*np.sin(theta[2])-np.cos(theta[0])*np.sin(theta[1])*np.cos(theta[2]))-x_measured[1],
+			2+3*np.cos(theta[1])*np.cos(theta[2])-x_measured[2]])
+    #perform solver
+    theta_est = fsolve(function_for_fsolve,np.array([0,0,0]),xtol=1e-3)
+
     
-    def trans_tot(theta1,theta2,theta3):
-        return trans(-np.pi/2,2,theta1-np.pi/2).dot(trans(-np.pi/2,0,theta2).dot(trans(-np.pi/2,3,theta3)))
-    def own_try(theta1,theta2,theta3):
-	x = 3*np.sin(theta3)
-	y = -3*np.sin(theta2)*np.cos(theta3)
-	z = 2+3*np.cos(theta2)*np.cos(theta3)
-	rot = np.array([[np.cos(theta1),-np.sin(theta1),0],
-			[np.sin(theta1),np.cos(theta1),0],
-			[0,0,1]])
-	one = np.array([[1,0,0],
-			[0,1,0],
-			[0,0,1]])
-        return rot.dot(np.array([x,y,z]))
+    #define desired joint angles
+    q_d = [0,np.pi/2,0]		#move robot here
+    self.joint1=Float64()
+    self.joint1.data= q_d[0]
+    self.joint2=Float64()
+    self.joint2.data= q_d[1]
+    self.joint3=Float64()
+    self.joint3.data= q_d[2]
     
-    #print("matrix x,y,z:\t{}, {}, {} ".format(trans_tot(1,1,1)[0,3],trans_tot(1,1,1)[1,3],trans_tot(1,1,1)[2,3]))
-        
-    print("measured x,y,z:\t{}, {}, {}/{}".format(pos_cam2[2,0],pos_cam1[2,0],pos_cam2[2,1],pos_cam1[2,1]))
-    thetaz=0
-    thetax=1
-    thetay=1
-    print("own try x,y,z:\t{}, {}, {}".format(own_try(thetaz,thetax,thetay)[0],own_try(thetaz,thetax,thetay)[1],own_try(thetaz,thetax,thetay)[2]))
+    print("pos out of measured angle:\t{}".format(function_for_fsolve(theta_est)+x_measured))
+    print("measured pos:\t\t\t{}".format(x_measured))
+    print("theoretical position:\t\t{}\n".format(self.pos_green_blob(*q_d)))
+    print("measured angle:\t\t\t{}".format(np.fmod(theta_est,2*np.pi)))
+    print("desired angle:\t\t\t{}\n\n".format(q_d))
+    
+    #publish results
+    try: 
+      self.robot_joint1_pub.publish(self.joint1)
+      self.robot_joint2_pub.publish(self.joint2)
+      self.robot_joint3_pub.publish(self.joint3)
+    except CvBridgeError as e:
+      print(e)
 
 # call the class
 def main(args):
