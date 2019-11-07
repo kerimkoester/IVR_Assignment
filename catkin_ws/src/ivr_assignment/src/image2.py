@@ -120,12 +120,26 @@ class image_converter:
         return rotz(theta).dot(trans_x(d).dot(rotx(alpha)))
     
     def trans_tot(theta1,theta2,theta3):
-        return trans(-np.pi/2,2,theta1).dot(trans(np.pi/2,0,theta2).dot(trans(np.pi/2,3,theta3)))
+        return trans(-np.pi/2,2,theta1-np.pi/2).dot(trans(-np.pi/2,0,theta2).dot(trans(-np.pi/2,3,theta3)))
+    def own_try(theta1,theta2,theta3):
+	x = 3*np.sin(theta3)
+	y = -3*np.sin(theta2)*np.cos(theta3)
+	z = 2+3*np.cos(theta2)*np.cos(theta3)
+	rot = np.array([[np.cos(theta1),-np.sin(theta1),0],
+			[np.sin(theta1),np.cos(theta1),0],
+			[0,0,1]])
+	one = np.array([[1,0,0],
+			[0,1,0],
+			[0,0,1]])
+        return rot.dot(np.array([x,y,z]))
     
-    print("transmat: ",trans_tot(0,0,0)[:,3])
+    #print("matrix x,y,z:\t{}, {}, {} ".format(trans_tot(1,1,1)[0,3],trans_tot(1,1,1)[1,3],trans_tot(1,1,1)[2,3]))
         
-    print("y,z: ",pos_cam1)
-    print("x,z: ",pos_cam2)
+    print("measured x,y,z:\t{}, {}, {}/{}".format(pos_cam2[2,0],pos_cam1[2,0],pos_cam2[2,1],pos_cam1[2,1]))
+    thetaz=0
+    thetax=1
+    thetay=1
+    print("own try x,y,z:\t{}, {}, {}".format(own_try(thetaz,thetax,thetay)[0],own_try(thetaz,thetax,thetay)[1],own_try(thetaz,thetax,thetay)[2]))
 
 # call the class
 def main(args):
