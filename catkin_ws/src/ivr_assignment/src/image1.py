@@ -35,6 +35,8 @@ class image_converter:
       # Obtain the moments of the binary image
       M = cv2.moments(mask)
       # Calculate pixel coordinates for the centre of the blob
+      if M['m00'] == 0:
+	return np.array([np.nan,np.nan])
       cx = int(M['m10'] / M['m00'])
       cy = int(M['m01'] / M['m00'])
       return np.array([cx, cy])
@@ -44,6 +46,8 @@ class image_converter:
       kernel = np.ones((5, 5), np.uint8)
       mask = cv2.dilate(mask, kernel, iterations=3)
       M = cv2.moments(mask)
+      if M['m00'] == 0:
+	return np.array([np.nan,np.nan])
       cx = int(M['m10'] / M['m00'])
       cy = int(M['m01'] / M['m00'])
       return np.array([cx, cy])
@@ -53,6 +57,8 @@ class image_converter:
       kernel = np.ones((5, 5), np.uint8)
       mask = cv2.dilate(mask, kernel, iterations=3)
       M = cv2.moments(mask)
+      if M['m00'] == 0:
+	return np.array([np.nan,np.nan])
       cx = int(M['m10'] / M['m00'])
       cy = int(M['m01'] / M['m00'])
       return np.array([cx, cy])
@@ -62,6 +68,8 @@ class image_converter:
       kernel = np.ones((5, 5), np.uint8)
       mask = cv2.dilate(mask, kernel, iterations=3)
       M = cv2.moments(mask)
+      if M['m00'] == 0:
+	return np.array([np.nan,np.nan])
       cx = int(M['m10'] / M['m00'])
       cy = int(M['m01'] / M['m00'])
       return np.array([cx, cy])
@@ -76,7 +84,8 @@ class image_converter:
       print(e)
     
     self.blob_pos1=Float64MultiArray()
-    self.blob_pos1.data=np.array([self.detect_yellow(self.cv_image1),self.detect_blue(self.cv_image1),self.detect_green(self.cv_image1),self.detect_red(self.cv_image1)]).flatten()
+    self.blob_pos1.data=np.array([self.detect_yellow(self.cv_image1),self.detect_blue(self.cv_image1),
+				  self.detect_green(self.cv_image1),self.detect_red(self.cv_image1)]).flatten()
         
 
     im1=cv2.imshow('window1', self.cv_image1)
