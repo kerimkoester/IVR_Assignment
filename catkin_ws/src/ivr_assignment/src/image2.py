@@ -194,6 +194,7 @@ class image_converter:
     pos_cam2 = self.get_projection(self.blob_pos2.data,0.3,5/132.)
     x_measured = self.blobs_measured(pos_cam1,pos_cam2)
 
+    x_measured_blue = x_measured[1]
     x_measured_green = x_measured[2]
     x_measured_red = x_measured[3]
     #x_diff_red_green = x_measured_red-x_measured_green
@@ -206,9 +207,6 @@ class image_converter:
     #perform solver
     #theta_est = fsolve(function_for_fsolve_green,np.array([0,0,0]),xtol=1e-8)
 
-    #temp = self.roty(theta_est[2]).dot(self.rotx(-theta_est[1]).dot(self.rotz(-theta_est[0]).dot(x_diff_red_green/2)))
-    #theta4 = np.arctan(-temp[1]/temp[2])
-    #theta_est = np.append(theta_est,theta4)
 
     #def function_for_fsolve(theta):
     #    temp = self.roty(theta[2]).dot(self.rotx(-theta[1]).dot(self.rotz(-theta[0]).dot(x_diff_red_green/2)))
@@ -218,9 +216,11 @@ class image_converter:
 	#		np.arctan(-temp[1]/temp[2])-theta[3]])
     #theta_est = fsolve(function_for_fsolve,np.array([0,0,0,0]),xtol=1e-8)
 
-    
+
+
+
     #define desired joint angles
-    q_d = [0,0,0,np.pi/2]		#move robot here
+    q_d = [0,np.pi/4,np.pi/4,0]		#move robot here
     self.joint1=Float64()
     self.joint1.data= q_d[0]
     self.joint2=Float64()
@@ -229,12 +229,116 @@ class image_converter:
     self.joint3.data= q_d[2]
     self.joint4=Float64()
     self.joint4.data= q_d[3]
+
+    #theoretical positions out of desired joint angles
+    theoretical_pos_red = self.pos_red_blob(self.pos_green_blob(q_d[0],q_d[1],q_d[2]),*q_d)
+    theoretical_pos_green = self.pos_green_blob(q_d[0],q_d[1],q_d[2])
+
+    #use fsolve to get the estimated joint angles
+    '''def function_for_fsolve(theta):
+      link3 = self.pos_red_blob(0,theta[0],theta[1],theta[2],theta[3])
+      x_green = 3*(np.cos(theta[0])*np.sin(theta[2])+np.sin(theta[0])*np.sin(theta[1])*np.cos(theta[2]))
+      y_green = 3*(np.sin(theta[0])*np.sin(theta[2])-np.cos(theta[0])*np.sin(theta[1])*np.cos(theta[2]))
+      z_green = 2+3*np.cos(theta[1])*np.cos(theta[2])
+      x_red = x_green + link3[0]
+      y_red = y_green + link3[1]
+      z_red = z_green + link3[2]
+      return np.array([x_green-x_measured_green[0],
+	               y_green-x_measured_green[1],
+		       z_green-x_measured_green[2],
+		       #x_red-x_measured_red[0],
+		       #y_red-x_measured_red[1]])
+		       z_red-x_measured_red[2]])
+    theta_est = fsolve(function_for_fsolve,np.array([0,0,0]),xtol=1e-10)
+    theta_est[0] = theta_est[0] % 2*np.pi
+    if theta_est[0]<np.pi:
+      theta_est[0]=theta_est[0]+2*np.pi
+    if theta_est[0]>np.pi:
+      theta_est[0]=theta_est[0]-2*np.pi
+
+    #another approach
+    def function_for_fsolve23(theta):
+      x_green = 3*(np.cos(theta[0])*np.sin(theta[2])+np.sin(theta[0])*np.sin(theta[1])*np.cos(theta[2]))
+      y_green = 3*(np.sin(theta[0])*np.sin(theta[2])-np.cos(theta[0])*np.sin(theta[1])*np.cos(theta[2]))
+      z_green = 2+3*np.cos(theta[1])*np.cos(theta[2])
+      return np.array([x_green-x_measured_green[0],
+	               y_green-x_measured_green[1],
+		       z_green-x_measured_green[2]])
+    theta_est23 = fsolve(function_for_fsolve23,np.array([0,0,0]))
     
-    #print("pos out of measured angle:\t{}".format(self.pos_red_blob(self.pos_green_blob(theta_est[0],theta_est[1],theta_est[2]),*theta_est)))
-    #print("measured pos:\t\t\t{}".format(x_measured_red))
-    #print("theoretical position:\t\t{}\n".format(self.pos_red_blob(self.pos_green_blob(q_d[0],q_d[1],q_d[2]),*q_d)))
-    #print("measured angle:\t\t\t{}".format(np.fmod(theta_est,2*np.pi)))
-    #print("desired angle:\t\t\t{}\n\n".format(q_d))
+    def function_for_fsolve14(theta):
+      link3 = self.pos_red_blob(0,theta[0],theta_est23[1],theta[2],theta[1])
+      x_green = 3*(np.cos(theta[0])*np.sin(theta[2])+np.sin(theta[0])*np.sin(theta_est23[1])*np.cos(theta[2]))
+      y_green = 3*(np.sin(theta[0])*np.sin(theta[2])-np.cos(theta[0])*np.sin(theta_est23[1])*np.cos(theta[2]))
+      z_green = 2+3*np.cos(theta_est23[1])*np.cos(theta[2])
+      x_red = x_green + link3[0]
+      y_red = y_green + link3[1]
+      z_red = z_green + link3[2]
+      return np.array([x_red-x_measured_red[0],
+		       y_red-x_measured_red[1],
+		       z_red-x_measured_red[2]])
+    theta_est14 = fsolve(function_for_fsolve14,np.array([theta_est23[0],0,theta_est23[2]]))
+
+    theta_est = np.array([theta_est14[0],theta_est23[1],theta_est23[2],theta_est14[1]])
+    theta_est[0] = theta_est[0] % 2*np.pi
+    if theta_est[0]<np.pi:
+      theta_est[0]=theta_est[0]+2*np.pi
+    if theta_est[0]>np.pi:
+      theta_est[0]=theta_est[0]-2*np.pi'''
+    def get_vector(theta1,theta2,theta3):
+      s1 = np.sin(theta1)
+      c1 = np.cos(theta1)
+      s2 = np.sin(theta2)
+      c2 = np.cos(theta2)
+      s3 = np.sin(theta3)
+      c3 = np.cos(theta3)
+      mat = np.array([[c1*c3-s1*s2*s3,-s1*c2,+c1*s3+s1*s2*c3],
+		      [s1*c3+c1*s2*s3,c1*c2,+s1*s3-c1*s2*c3],
+		      [-c2*s3,s2,c2*c3]])
+      z = np.array([0,0,1])
+      z = mat.dot(z)*3
+      return z
+    def get_theta(x_measured):
+      a = np.array([0,0,1])
+      b = x_measured[2]-x_measured[1]
+      b = b/np.linalg.norm(b)
+      v = np.cross(a,b)
+      s = np.linalg.norm(v)
+      c = a.dot(b)
+      vx = np.array([[0,-v[2],v[1]],
+		    [v[2],0,-v[0]],
+		    [-v[1],v[0],0]])
+      one = np.array([[1,0,0],[0,1,0],[0,0,1]])
+      mat = one+vx+vx.dot(vx)*(1-c)/s**2
+      print(mat)
+
+      theta1 = np.arctan2(-mat[0,1],mat[1,1])
+      theta2 = np.arctan2(mat[2,1],np.sqrt(mat[2,0]**2+mat[2,2]**2))
+      theta3 = np.arctan2(-mat[2,0],mat[2,2])
+      theta = np.array([theta1,theta2,theta3])
+
+      d = x_measured[3]-x_measured[2]
+      dd = self.roty(theta[2]).dot(self.rotx(-theta[1]).dot(self.rotz(-theta[0]).dot(d)))
+      theta4 = np.arctan2(-dd[1],dd[2])
+      theta = np.append(theta,theta4)
+      return theta
+    print(get_theta(x_measured))
+ 
+
+
+    
+
+    #test
+    '''meas_angle_pos_red = self.pos_red_blob(self.pos_green_blob(theta_est[0],theta_est[1],theta_est[2]),*theta_est)
+
+    print(function_for_fsolve23(theta_est23))
+    print(function_for_fsolve14(theta_est14))
+
+    print("pos out of measured angle:\t{}".format(meas_angle_pos_red))
+    print("measured pos:\t\t\t{}".format(x_measured_red))
+    print("theoretical position:\t\t{}\n".format(theoretical_pos_red))
+    print("measured angle:\t\t\t{}".format(theta_est))
+    print("desired angle:\t\t\t{}\n\n".format(q_d))'''
     
     #publish results
     try: 
