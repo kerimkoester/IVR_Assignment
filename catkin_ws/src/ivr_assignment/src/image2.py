@@ -26,6 +26,7 @@ class image_converter:
     self.image_pub2 = rospy.Publisher("image_topic2",Image, queue_size = 1)
     # initialize a subscriber to recieve messages rom a topic named /robot/camera1/image_raw and use callback function to recieve data
     self.image_sub2 = rospy.Subscriber("/camera2/robot/image_raw",Image,self.callback2)
+    cv2.waitKey(1)
     self.image1_sub = rospy.Subscriber("/camera1/blob_pos",Float64MultiArray,self.callbackmaster)
     # initialize a publisher to publish position of blobs
     self.blob_pub2 = rospy.Publisher("/camera2/blob_pos",Float64MultiArray, queue_size=10)
@@ -44,6 +45,7 @@ class image_converter:
     self.target_ypos = rospy.Publisher("/target/y_position_measured", Float64, queue_size=10)
     self.target_zpos = rospy.Publisher("/target/z_position_measured", Float64, queue_size=10)
     # initialize the bridge between openCV and ROS
+    self.pos_reserve = np.array([0,0,0,0,0,0,0,0,0,0])
     
 
   #___________________detection of the blobs__________________________
@@ -99,7 +101,7 @@ class image_converter:
       return np.array([cx, cy])
 
   #______________get the projection from published blob data______________
-  def eliminate_nonvisible_blobs(self,blobs):    
+  def eliminate_nonvisible_blobs(self,blobs):  
     if np.isnan(blobs[4]):
       blobs[4]=blobs[2]
       blobs[5]=blobs[3]
@@ -195,9 +197,10 @@ class image_converter:
     #define unity vector pointing from blue blob to green blob
     b = self.x_measured[2]-self.x_measured[1]
     b = b/np.linalg.norm(b)
-    return (c1*s3+s1*s2*c3-b[0])**2+(s1*s3-c1*s2*c3-b[1])**2+(c2*c3-b[2])**2
+    return abs(c1*s3+s1*s2*c3-b[0])+abs(s1*s3-c1*s2*c3-b[1])+abs(c2*c3-b[2])
   def measure_angle(self):
-    theta_num = minimize(self.func_min,self.q_d[:-1],method='nelder-mead',options={'xtol':1e-5})
+    theta_num = minimize(self.func_min,self.q_d[:-1],method='nelder-mead',options={'xtol':1e-6})
+    #theta_num = minimize(self.func_min,np.array([0,0,0]),method='nelder-mead',options={'xtol':1e-8})
     theta_num = theta_num.x
     d = self.x_measured[3]-self.x_measured[2]
     d = d/np.linalg.norm(d)
@@ -276,7 +279,7 @@ class image_converter:
     self.blob_pos2.data=np.array([self.detect_yellow(self.cv_image2),self.detect_blue(self.cv_image2),self.detect_green(self.cv_image2),self.detect_red(self.cv_image2),self.orange_sphere2]).flatten()
     #im2=cv2.imshow('window2', self.cv_image2)
     #cv2.waitKey(1)
-    #cv2.imwrite('cam2.png',self.cv_image2)
+    cv2.imwrite('cam2.png',self.cv_image2)
 
     #Publish the results
     try: 
@@ -290,18 +293,23 @@ class image_converter:
   #_________________________combine both images____________________________
   def callbackmaster(self,data):
     #get the blob positions relative to the blue blob (blue at (0,0,0))
+    if len(self.blob_pos2.data)==0:
+      pos2 = self.pos_reserve
+    else:
+      pos2 = self.blob_pos2.data
+      self.pos_reserve = pos2
     blob_pos1 = np.array(data.data[0:8])
-    blob_pos2 = self.blob_pos2.data[0:8]
+    blob_pos2 = np.array(pos2[0:8])
     target_pos1 = np.array(data.data[8:])
-    target_pos2 = self.blob_pos2.data[8:]
-    
+    target_pos2 = pos2[8:]
+      
     pos_cam1,target_cam1 = self.get_projection(blob_pos1,target_pos1,5/134.)
     pos_cam2,target_cam2 = self.get_projection(blob_pos2,target_pos2,5/132.)
     self.x_measured = self.blobs_measured(pos_cam1,pos_cam2)
     self.target_measured = self.target_measure(target_cam1,target_cam2)
 
     #define desired joint angles
-    self.q_d = [1,-0.5,1,0.2]		#move robot here
+    self.q_d = [0.6, -0.3, 0.4 , 0.4]		#move robot here
     self.joint1=Float64()
     self.joint1.data= self.q_d[0]
     self.joint2=Float64()
@@ -328,8 +336,8 @@ class image_converter:
     self.spherez=Float64()
     self.spherez.data=self.target_measured[2]
 
-    #print("desired:\t{}".format(self.q_d))
-    #print("numerical:\t{}".format(theta_measured))
+    print("desired:\t{}".format(self.q_d))
+    print("numerical:\t{}".format(theta_measured))
     #print(self.func_min(self.q_d[:-1]))
     #print(self.func_min(theta_measured[:-1]))
 

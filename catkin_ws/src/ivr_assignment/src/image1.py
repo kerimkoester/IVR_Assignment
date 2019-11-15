@@ -145,7 +145,7 @@ class image_converter:
     self.blob_pos1.data=np.array([self.detect_yellow(self.cv_image1),self.detect_blue(self.cv_image1),
 				  self.detect_green(self.cv_image1),self.detect_red(self.cv_image1),self.orange_sphere1]).flatten()
 
-    #cv2.imwrite('cam1.png',self.cv_image1)
+    cv2.imwrite('cam1.png',self.cv_image1)
     #Publish the results
     try: 
       self.image_pub1.publish(self.bridge.cv2_to_imgmsg(self.cv_image1, "bgr8"))
