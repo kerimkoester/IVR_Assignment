@@ -10,6 +10,8 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import Float64MultiArray, Float64
 from cv_bridge import CvBridge, CvBridgeError
 from scipy.optimize import fsolve
+from scipy.optimize import minimize
+import math
 
 
 class image_converter:
@@ -32,6 +34,15 @@ class image_converter:
     self.robot_joint2_pub = rospy.Publisher("/robot/joint2_position_controller/command", Float64, queue_size=10)
     self.robot_joint3_pub = rospy.Publisher("/robot/joint3_position_controller/command", Float64, queue_size=10)
     self.robot_joint4_pub = rospy.Publisher("/robot/joint4_position_controller/command", Float64, queue_size=10)
+    # initialize publisher to publish measured joint angles
+    self.robot_joint1_measured = rospy.Publisher("/robot/joint1_position_measured", Float64, queue_size=10)
+    self.robot_joint2_measured = rospy.Publisher("/robot/joint2_position_measured", Float64, queue_size=10)
+    self.robot_joint3_measured = rospy.Publisher("/robot/joint3_position_measured", Float64, queue_size=10)
+    self.robot_joint4_measured = rospy.Publisher("/robot/joint4_position_measured", Float64, queue_size=10)
+    # initalize a publisher to publish measured target sphere
+    self.target_xpos = rospy.Publisher("/target/x_position_measured", Float64, queue_size=10)
+    self.target_ypos = rospy.Publisher("/target/y_position_measured", Float64, queue_size=10)
+    self.target_zpos = rospy.Publisher("/target/z_position_measured", Float64, queue_size=10)
     # initialize the bridge between openCV and ROS
     
 
@@ -97,22 +108,17 @@ class image_converter:
       blobs[7]=blobs[5]
     return blobs
 
-  '''def get_projection1(self,blobs,r_yellow,scale):
+  def get_projection(self,blobs,target,scale):
     corrected_blobs = self.eliminate_nonvisible_blobs(blobs)
     pos_cam = np.array(corrected_blobs).reshape((4,2))
     pos_cam = scale*pos_cam
-    pos_cam[0,1] = pos_cam[0,1]+r_yellow #takes into account that only half yellow blob is visible
-    pos_cam = pos_cam-pos_cam[0]
-    pos_cam[:,1]=-pos_cam[:,1]
-    return np.array(pos_cam)'''
-
-  def get_projection(self,blobs,scale):
-    corrected_blobs = self.eliminate_nonvisible_blobs(blobs)
-    pos_cam = np.array(corrected_blobs).reshape((4,2))
-    pos_cam = scale*pos_cam
+    pos_cam_target = scale*target
+    pos_cam_target = pos_cam_target-pos_cam[1]
     pos_cam = pos_cam-pos_cam[1]
     pos_cam[:,1]=-pos_cam[:,1]
-    return np.array(pos_cam)
+    pos_cam_target[1] = -pos_cam_target[1]
+    return np.array(pos_cam),pos_cam_target
+
 
   #________________use projection to get blob position___________________
   
@@ -137,6 +143,9 @@ class image_converter:
   def blobs_measured(self,cam1,cam2):
     return np.array([self.yellow_blob_measured(cam1,cam2),self.blue_blob_measured(cam1,cam2),
 		     self.green_blob_measured(cam1,cam2),self.red_blob_measured(cam1,cam2)])
+
+  def target_measure(self,target1,target2):
+    return np.array([target2[0],target1[0],self.z_average(target1[1],target2[1],target2[0],target1[0])])
     
 
   #__________________matrix calculation for green blob __________________
@@ -174,30 +183,84 @@ class image_converter:
     return green_blob+2*self.rot_tot(theta1,theta2,theta3,theta4).dot(np.array([0,0,1]))
 
   #__________________calculate joint angles_______________________
-  def get_theta(self,x_measured):
-    a = np.array([0,0,1])
-    b = x_measured[2]-x_measured[1]
+ 
+  #function that is minimized w.r.t. theta_123
+  def func_min(self,theta):
+    s1 = np.sin(theta[0])
+    c1 = np.cos(theta[0])
+    s2 = np.sin(theta[1])
+    c2 = np.cos(theta[1])
+    s3 = np.sin(theta[2])
+    c3 = np.cos(theta[2])
+    #define unity vector pointing from blue blob to green blob
+    b = self.x_measured[2]-self.x_measured[1]
     b = b/np.linalg.norm(b)
-    v = np.cross(a,b)
-    s = np.linalg.norm(v)
-    c = a.dot(b)
-    vx = np.array([[0,-v[2],v[1]],
-    		   [v[2],0,-v[0]],
-		   [-v[1],v[0],0]])
-    one = np.array([[1,0,0],[0,1,0],[0,0,1]])
-    mat = one+vx+vx.dot(vx)*(1-c)/s**2
-
-    theta1 = np.arctan2(-mat[0,1],mat[1,1])
-    theta2 = np.arctan2(mat[2,1],np.sqrt(mat[2,0]**2+mat[2,2]**2))
-    theta3 = np.arctan2(-mat[2,0],mat[2,2])
-    theta = np.array([theta1,theta2,theta3])
-
-    d = x_measured[3]-x_measured[2]
-    dd = self.roty(theta[2]).dot(self.rotx(-theta[1]).dot(self.rotz(-theta[0]).dot(d)))
+    return (c1*s3+s1*s2*c3-b[0])**2+(s1*s3-c1*s2*c3-b[1])**2+(c2*c3-b[2])**2
+  def measure_angle(self):
+    theta_num = minimize(self.func_min,self.q_d[:-1],method='nelder-mead',options={'xtol':1e-5})
+    theta_num = theta_num.x
+    d = self.x_measured[3]-self.x_measured[2]
+    d = d/np.linalg.norm(d)
+    dd = self.roty(-theta_num[2]).dot(self.rotx(-theta_num[1]).dot(self.rotz(-theta_num[0]).dot(d)))
     theta4 = np.arctan2(-dd[1],dd[2])
-    theta = np.append(theta,theta4)
-    return theta,mat
+    theta_num = np.append(theta_num,theta4)
+    return theta_num
+
+  #________________Target Detection______________________________________________
+
+  def detectTarget(self, sourceImg):
+    self.getSphere(sourceImg)
+    return (self.findCenter(self.compareCnts()))
+
+  #use color threshhold to segment target
+  def detectOrange(self, sourceImg):
+    targetImg = cv2.inRange(sourceImg,(10,10,120),(100,255,255))
+    return targetImg
+
+  #get contours of the orange objects
+  def contours(self, sourceImg):
+    targetImg = self.detectOrange(sourceImg)
+    img = cv2.bitwise_not(targetImg)
+    contours, hierarchy = cv2.findContours(img, 1, 2)
+
+    self.cnt1 = contours[0]
+    self.cnt2 = contours[1]
+
+
+  #calculate the circularity of each contour
+  def getCircularity(self,cnt):
+    perimeter = cv2.arcLength(cnt, True)
+    area = cv2.contourArea(cnt)
     
+    return (4*math.pi*area)/(perimeter**2)
+
+  #compares two contour and returns the one that is less circular
+  def compareCnts(self):
+    if self.getCircularity(self.cnt1)>self.getCircularity(self.cnt2):
+      return self.cnt1
+    else:
+      return self.cnt2
+
+  #display the contour of a sphere
+  def getSphere(self, sourceImg):
+    self.contours(sourceImg)
+ 
+    self.sphere = cv2.inRange(sourceImg,(100,100,100),(101,101,101))
+    cv2.drawContours(self.sphere,[self.compareCnts()],0,(255,0,255),1)
+
+  #findCenter of the contour
+  def findCenter(self, cnt):
+    M = cv2.moments(cnt)
+    if M['m00'] == 0:
+      return np.array([np.nan,np.nan])
+    cx = int(M['m10']/M['m00'])
+    cy = int(M['m01']/M['m00'])
+   
+    return [cx,cy]
+
+
+
+
 
 
   # _______________Recieve data, process it, and publish______________________
@@ -208,10 +271,12 @@ class image_converter:
     except CvBridgeError as e:
       print(e)
     
+    self.orange_sphere2=self.detectTarget(self.cv_image2)
     self.blob_pos2=Float64MultiArray()
-    self.blob_pos2.data=np.array([self.detect_yellow(self.cv_image2),self.detect_blue(self.cv_image2),self.detect_green(self.cv_image2),self.detect_red(self.cv_image2)]).flatten()
-    im2=cv2.imshow('window2', self.cv_image2)
-    cv2.waitKey(1)
+    self.blob_pos2.data=np.array([self.detect_yellow(self.cv_image2),self.detect_blue(self.cv_image2),self.detect_green(self.cv_image2),self.detect_red(self.cv_image2),self.orange_sphere2]).flatten()
+    #im2=cv2.imshow('window2', self.cv_image2)
+    #cv2.waitKey(1)
+    #cv2.imwrite('cam2.png',self.cv_image2)
 
     #Publish the results
     try: 
@@ -219,56 +284,68 @@ class image_converter:
       self.blob_pub2.publish(self.blob_pos2)
     except CvBridgeError as e:
       print(e)
-
+  
 
 
   #_________________________combine both images____________________________
   def callbackmaster(self,data):
     #get the blob positions relative to the blue blob (blue at (0,0,0))
-    blob_pos1 = np.array(data.data)
-    pos_cam1 = self.get_projection(blob_pos1,5/134.)
-    pos_cam2 = self.get_projection(self.blob_pos2.data,5/132.)
-    x_measured = self.blobs_measured(pos_cam1,pos_cam2)
+    blob_pos1 = np.array(data.data[0:8])
+    blob_pos2 = self.blob_pos2.data[0:8]
+    target_pos1 = np.array(data.data[8:])
+    target_pos2 = self.blob_pos2.data[8:]
+    
+    pos_cam1,target_cam1 = self.get_projection(blob_pos1,target_pos1,5/134.)
+    pos_cam2,target_cam2 = self.get_projection(blob_pos2,target_pos2,5/132.)
+    self.x_measured = self.blobs_measured(pos_cam1,pos_cam2)
+    self.target_measured = self.target_measure(target_cam1,target_cam2)
 
     #define desired joint angles
-    q_d = [ 1.5, 1, -0.5, 0]		#move robot here
+    self.q_d = [1,-0.5,1,0.2]		#move robot here
     self.joint1=Float64()
-    self.joint1.data= q_d[0]
+    self.joint1.data= self.q_d[0]
     self.joint2=Float64()
-    self.joint2.data= q_d[1]
+    self.joint2.data= self.q_d[1]
     self.joint3=Float64()
-    self.joint3.data= q_d[2]
+    self.joint3.data= self.q_d[2]
     self.joint4=Float64()
-    self.joint4.data= q_d[3]
+    self.joint4.data= self.q_d[3]
    
-    theoretical_green_blob = self.pos_green_blob(q_d[0],q_d[1],q_d[2])
-    theoretical_red_blob = self.pos_red_blob(theoretical_green_blob,*q_d)
-    theoretical_pos = np.array([0,0,theoretical_green_blob,theoretical_red_blob])
-    theta_theoretical, mat_theoretical = self.get_theta(theoretical_pos)
+    theta_measured = self.measure_angle()
+    self.joint1m=Float64()
+    self.joint1m.data= theta_measured[0]
+    self.joint2m=Float64()
+    self.joint2m.data= theta_measured[1]
+    self.joint3m=Float64()
+    self.joint3m.data= theta_measured[2]
+    self.joint4m=Float64()
+    self.joint4m.data= theta_measured[3]
 
-    theta_measured, mat_measured = self.get_theta(x_measured)
-    mat_straightforward = self.rot_123(q_d[0],q_d[1],q_d[2])
-    eff_sf = mat_straightforward.dot(np.array([0,0,1]))
-    eff_th = mat_theoretical.dot(np.array([0,0,1]))
-    eff_meas = mat_measured.dot(np.array([0,0,1]))
-    print(eff_sf)
-    print(eff_th)
-    print(eff_meas)
-    #print("measured mat:\t{}".format(mat_measured))
-    #print("theoretical mat:\t{}".format(mat_theoretical))
-    #print("straight mat:\t{}".format(mat_straightforward))
-    #print("theo pos:\t{}".format(theoretical_green_blob))
-    #print("measured pos:\t{}\n".format(x_measured[2]))
-    #print("analytical:\t{}".format(theta_measured))
-    #print("desired:\t{}".format(q_d))
-    #print("theoretical:\t{}\n\n".format(theta_theoretical))
-    
+    self.spherex=Float64()
+    self.spherex.data=self.target_measured[0]
+    self.spherey=Float64()
+    self.spherey.data=self.target_measured[1]
+    self.spherez=Float64()
+    self.spherez.data=self.target_measured[2]
+
+    #print("desired:\t{}".format(self.q_d))
+    #print("numerical:\t{}".format(theta_measured))
+    #print(self.func_min(self.q_d[:-1]))
+    #print(self.func_min(theta_measured[:-1]))
+
     #publish results
     try: 
       self.robot_joint1_pub.publish(self.joint1)
       self.robot_joint2_pub.publish(self.joint2)
       self.robot_joint3_pub.publish(self.joint3)
       self.robot_joint4_pub.publish(self.joint4)
+      self.robot_joint1_measured.publish(self.joint1m)
+      self.robot_joint2_measured.publish(self.joint2m)
+      self.robot_joint3_measured.publish(self.joint3m)
+      self.robot_joint4_measured.publish(self.joint4m)
+      self.target_xpos.publish(self.spherex)
+      self.target_ypos.publish(self.spherey)
+      self.target_zpos.publish(self.spherez)
     except CvBridgeError as e:
       print(e)
 

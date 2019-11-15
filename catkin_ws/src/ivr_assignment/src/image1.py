@@ -9,6 +9,7 @@ from std_msgs.msg import String
 from sensor_msgs.msg import Image
 from std_msgs.msg import Float64MultiArray, Float64
 from cv_bridge import CvBridge, CvBridgeError
+import math
 
 
 class image_converter:
@@ -74,6 +75,61 @@ class image_converter:
       cy = int(M['m01'] / M['m00'])
       return np.array([cx, cy])
 
+ #________________Target Detection______________________________________________
+
+  def detectTarget(self, sourceImg):
+    self.getSphere(sourceImg)
+    return (self.findCenter(self.sphere))
+
+  #use color threshhold to segment target
+  def detectOrange(self, sourceImg):
+    targetImg = cv2.inRange(sourceImg,(10,10,120),(100,255,255))
+    return targetImg
+
+  #get contours of the orange objects
+  def contours(self, sourceImg):
+    targetImg = self.detectOrange(sourceImg)
+    img = cv2.bitwise_not(targetImg)
+    contours, hierarchy = cv2.findContours(img, 1, 2)
+
+    self.cnt1 = contours[0]
+    self.cnt2 = contours[1]
+
+
+  #calculate the circularity of each contour
+  def getCircularity(self,cnt):
+    perimeter = cv2.arcLength(cnt, True)
+    area = cv2.contourArea(cnt)
+    
+    return (4*math.pi*area)/(perimeter**2)
+
+  #compares two contour and returns the one that is less circular
+  def compareCnts(self):
+    if self.getCircularity(self.cnt1)>self.getCircularity(self.cnt2):
+      return self.cnt1
+    else:
+      return self.cnt2
+
+  #display the contour of a sphere
+  def getSphere(self, sourceImg):
+    self.contours(sourceImg)
+    
+    self.sphere = cv2.inRange(sourceImg,(100,100,100),(101,101,101))
+    cv2.drawContours(self.sphere,[self.compareCnts()],0,(255,0,255),1)
+    #cv2.imshow('box',self.sphere)
+
+  #findCenter of the contour
+  def findCenter(self, cnt):
+    M = cv2.moments(cnt)
+    if M['m00'] == 0:
+      return np.array([np.nan,np.nan])
+    cx = int(M['m10']/M['m00'])
+    cy = int(M['m01']/M['m00'])
+   
+    return [cx,cy]
+
+
+
 
   # Recieve data from camera 1, process it, and publish
   def callback1(self,data):
@@ -82,15 +138,15 @@ class image_converter:
       self.cv_image1 = self.bridge.imgmsg_to_cv2(data, "bgr8")
     except CvBridgeError as e:
       print(e)
-    
+    #im1=cv2.imshow('window1', self.cv_image1)
+    #cv2.waitKey(1)
+    self.orange_sphere1 = self.detectTarget(self.cv_image1)
     self.blob_pos1=Float64MultiArray()
     self.blob_pos1.data=np.array([self.detect_yellow(self.cv_image1),self.detect_blue(self.cv_image1),
-				  self.detect_green(self.cv_image1),self.detect_red(self.cv_image1)]).flatten()
-        
+				  self.detect_green(self.cv_image1),self.detect_red(self.cv_image1),self.orange_sphere1]).flatten()
 
-    im1=cv2.imshow('window1', self.cv_image1)
-    cv2.waitKey(1)
-    # Publish the results
+    #cv2.imwrite('cam1.png',self.cv_image1)
+    #Publish the results
     try: 
       self.image_pub1.publish(self.bridge.cv2_to_imgmsg(self.cv_image1, "bgr8"))
       self.blob_pub1.publish(self.blob_pos1)
