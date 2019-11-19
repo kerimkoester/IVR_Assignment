@@ -184,6 +184,21 @@ class image_converter:
   def pos_red_blob(self,green_blob,theta1,theta2,theta3,theta4):
     return green_blob+2*self.rot_tot(theta1,theta2,theta3,theta4).dot(np.array([0,0,1]))
 
+  def pos_red_blob_ana(self,theta1,theta2,theta3,theta4):
+    s1 = np.sin(theta1)
+    c1 = np.cos(theta1)
+    s2 = np.sin(theta2)
+    c2 = np.cos(theta2)
+    s3 = np.sin(theta3)
+    c3 = np.cos(theta3)
+    s4 = np.sin(theta4)
+    c4 = np.cos(theta4)
+    f = 3+2*c4
+    x = 2*s1*c2*s4+f*(c1*s3+s1*s2*c3)
+    y = -2*c1*c2*s4+f*(s1*s3-c1*s2*c3)
+    z = -s2*s4+f*c2*c3
+    return np.array([x,y,z])
+
   #__________________calculate joint angles_______________________
  
   #function that is minimized w.r.t. theta_123
@@ -309,7 +324,9 @@ class image_converter:
     self.target_measured = self.target_measure(target_cam1,target_cam2)
 
     #define desired joint angles
-    self.q_d = [0.6, -0.3, 0.4 , 0.4]		#move robot here
+    self.q_d = [0.1,3,0.1,20]		#move robot here
+    
+    #prepare publishing desired joint angles
     self.joint1=Float64()
     self.joint1.data= self.q_d[0]
     self.joint2=Float64()
@@ -319,6 +336,7 @@ class image_converter:
     self.joint4=Float64()
     self.joint4.data= self.q_d[3]
    
+    #prepare publishing measured joint angles
     theta_measured = self.measure_angle()
     self.joint1m=Float64()
     self.joint1m.data= theta_measured[0]
@@ -329,6 +347,7 @@ class image_converter:
     self.joint4m=Float64()
     self.joint4m.data= theta_measured[3]
 
+    #prepare publishing measured target position
     self.spherex=Float64()
     self.spherex.data=self.target_measured[0]
     self.spherey=Float64()
@@ -336,10 +355,30 @@ class image_converter:
     self.spherez=Float64()
     self.spherez.data=self.target_measured[2]
 
-    print("desired:\t{}".format(self.q_d))
+    #Correct error when sphere is hidden by target
+    #Assume that the first value of sphere isn't less than -1
+    if self.spherex.data<-1:
+       self.spherex.data = spherex_reserve
+    else:
+       spherex_reserve = self.spherex.data
+
+    if self.spherey.data <-1:
+       self.spherey.data = spherey_reserve
+    else:
+       spherey_reserve = self.spherey.data
+ 
+    if self.spherez.data <-1:
+       self.spherez.data = spherez_reserve
+    else:
+       spherez_reserve = self.spherez.data
+
+    #several results for testing
+    '''print("desired:\t{}".format(self.q_d))
     print("numerical:\t{}".format(theta_measured))
-    #print(self.func_min(self.q_d[:-1]))
-    #print(self.func_min(theta_measured[:-1]))
+    print(self.func_min(self.q_d[:-1]))
+    print(self.func_min(theta_measured[:-1]))
+    print(self.pos_red_blob_ana(*self.q_d))
+    print(self.pos_red_blob(self.pos_green_blob(*self.q_d[0:-1]),*self.q_d))'''
 
     #publish results
     try: 
