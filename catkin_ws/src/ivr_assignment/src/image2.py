@@ -44,8 +44,24 @@ class image_converter:
     self.target_xpos = rospy.Publisher("/target/x_position_measured", Float64, queue_size=10)
     self.target_ypos = rospy.Publisher("/target/y_position_measured", Float64, queue_size=10)
     self.target_zpos = rospy.Publisher("/target/z_position_measured", Float64, queue_size=10)
-    # initialize the bridge between openCV and ROS
+    # initalize a publisher to publish measured end-effector
+    self.end_effector_xpos = rospy.Publisher("/end_effector/x_position_measured", Float64, queue_size=10)
+    self.end_effector_ypos = rospy.Publisher("/end_effector/y_position_measured", Float64, queue_size=10)
+    self.end_effector_zpos = rospy.Publisher("/end_effector/z_position_measured", Float64, queue_size=10)
+    # initialize reserve variables for the case of an error
     self.pos_reserve = np.array([0,0,0,0,0,0,0,0,0,0])
+    self.spherex_reserve=0
+    self.spherey_reserve=0
+    self.spherez_reserve=0
+    # record the beginning time
+    self.time_trajectory = rospy.get_time()
+    # initialize errors
+    self.time_previous_step = np.array([rospy.get_time()], dtype='float64')     
+    # initialize error and derivative of error for trajectory tracking  
+    self.error = np.array([0.0,0.0,0.0], dtype='float64')  
+    self.error_d = np.array([0.0,0.0,0.0], dtype='float64')
+    self.q_d = np.array([0.1,0.1,0.1,0.1])
+
     
 
   #___________________detection of the blobs__________________________
@@ -227,44 +243,42 @@ class image_converter:
   #________________Target Detection______________________________________________
 
   def detectTarget(self, sourceImg):
-    self.getSphere(sourceImg)
-    return (self.findCenter(self.compareCnts()))
-
-  #use color threshhold to segment target
-  def detectOrange(self, sourceImg):
+    #segment target using color threshold
     targetImg = cv2.inRange(sourceImg,(10,10,120),(100,255,255))
-    return targetImg
-
-  #get contours of the orange objects
-  def contours(self, sourceImg):
-    targetImg = self.detectOrange(sourceImg)
+    
+    #get contours of the orange objects
     img = cv2.bitwise_not(targetImg)
     contours, hierarchy = cv2.findContours(img, 1, 2)
 
     self.cnt1 = contours[0]
     self.cnt2 = contours[1]
 
+    #display the contour of a sphere
+    if isinstance(self.compareCnts(),float):
+      return np.array([-1.5,-1.5])
+    else:
+      self.sphere = cv2.inRange(sourceImg,(100,100,100),(101,101,101))
+      cv2.drawContours(self.sphere,[self.compareCnts()],0,(255,0,255),1)
+      return self.findCenter(self.sphere)
+    
 
   #calculate the circularity of each contour
   def getCircularity(self,cnt):
     perimeter = cv2.arcLength(cnt, True)
     area = cv2.contourArea(cnt)
-    
-    return (4*math.pi*area)/(perimeter**2)
+    if perimeter == 0:
+      return np.nan
+    else:
+      return (4*math.pi*area)/(perimeter**2)
 
   #compares two contour and returns the one that is less circular
   def compareCnts(self):
+    if np.isnan(self.getCircularity(self.cnt1)) or np.isnan(self.getCircularity(self.cnt2)):
+      return np.nan
     if self.getCircularity(self.cnt1)>self.getCircularity(self.cnt2):
       return self.cnt1
     else:
       return self.cnt2
-
-  #display the contour of a sphere
-  def getSphere(self, sourceImg):
-    self.contours(sourceImg)
- 
-    self.sphere = cv2.inRange(sourceImg,(100,100,100),(101,101,101))
-    cv2.drawContours(self.sphere,[self.compareCnts()],0,(255,0,255),1)
 
   #findCenter of the contour
   def findCenter(self, cnt):
@@ -276,6 +290,39 @@ class image_converter:
    
     return [cx,cy]
 
+  #__________________________robot control_____________________________________
+  def Jacobian(self,theta):
+    s1 = np.sin(theta[0])
+    c1 = np.cos(theta[0])
+    s2 = np.sin(theta[1])
+    c2 = np.cos(theta[1])
+    s3 = np.sin(theta[2])
+    c3 = np.cos(theta[2])
+    s4 = np.sin(theta[3])
+    c4 = np.cos(theta[3])
+    J = np.array([[2*c1*c2*s4+(3+2*c4)*(-s1*s3+c1*s2*c3),-2*s1*s2*s4+(3+2*c4)*s1*c2*c3,(3+2*c4)*(c1*c3-s1*s2*s3),2*s1*c2*c4-2*s4*(c1*s3+s1*s2*c3)],
+  	     	  [2*s1*c2*s4+(3+2*c4)*(c1*s3+s1*s2*c3),2*c1*s2*s4-(3+2*c4)*c1*c2*c3,(3+2*c4)*(s1*c3+c1*s2*s3),-2*c1*c2*c4-2*s4*(s1*s3-c1*s2*c3)],
+		  [0,-c2*s4-(3+2*c4)*s2*c3,-(3+2*c4)*c2*s3,-s2*c4-2*s4*c2*c3]])
+    return J
+
+  def control_closed(self,pos_d,pos,q):
+    # P gain
+    K_p = np.array([[0.9,0,0],[0,0.9,0],[0,0,0.9]])
+    # D gain
+    K_d = np.array([[0,0,0],[0,0,0],[0,0,0]])
+    # estimate time step
+    cur_time = np.array([rospy.get_time()])
+    dt = cur_time - self.time_previous_step
+    self.time_previous_step = cur_time
+    # estimate derivative of error
+    self.error_d = ((pos_d - pos) - self.error)/dt
+    # estimate error
+    self.error = pos_d-pos
+    #print(self.error)
+    J_inv = np.linalg.pinv(self.Jacobian(q))  # calculating the psudeo inverse of Jacobian
+    dq_d =np.dot(J_inv, ( np.dot(K_d,self.error_d.transpose()) + np.dot(K_p,self.error.transpose()) ) )  # control input (angular velocity of joints)
+    q_d = q + (dt * dq_d)  # control input (angular position of joints)
+    return q_d
 
 
 
@@ -288,15 +335,18 @@ class image_converter:
       self.cv_image2 = self.bridge.imgmsg_to_cv2(data, "bgr8")
     except CvBridgeError as e:
       print(e)
-    
+    #pixel position of sphere
     self.orange_sphere2=self.detectTarget(self.cv_image2)
+    #pixel position of blobs and sphere all published on one topic in one array
     self.blob_pos2=Float64MultiArray()
     self.blob_pos2.data=np.array([self.detect_yellow(self.cv_image2),self.detect_blue(self.cv_image2),self.detect_green(self.cv_image2),self.detect_red(self.cv_image2),self.orange_sphere2]).flatten()
-    #im2=cv2.imshow('window2', self.cv_image2)
-    #cv2.waitKey(1)
-    cv2.imwrite('cam2.png',self.cv_image2)
+    '''
+    im2=cv2.imshow('window2', self.cv_image2)
+    cv2.waitKey(1)
+    #cv2.imwrite('cam2.png',self.cv_image2)
+    '''
 
-    #Publish the results
+    #Publish pixel position of blobs and sphere
     try: 
       self.image_pub2.publish(self.bridge.cv2_to_imgmsg(self.cv_image2, "bgr8"))
       self.blob_pub2.publish(self.blob_pos2)
@@ -307,25 +357,79 @@ class image_converter:
 
   #_________________________combine both images____________________________
   def callbackmaster(self,data):
+
+
+    #___________________SET TO TRUE TO ENABLE CONTROL______________________
+    #_____________SET TO FALSE FOR FIRST PART OF ASSIGNMENT________________
+    control = False
+
+
     #get the blob positions relative to the blue blob (blue at (0,0,0))
+    #prevent error if subscribed topic is empty
     if len(self.blob_pos2.data)==0:
       pos2 = self.pos_reserve
     else:
       pos2 = self.blob_pos2.data
       self.pos_reserve = pos2
+    #blobs are stored in first 8 positions of array
     blob_pos1 = np.array(data.data[0:8])
     blob_pos2 = np.array(pos2[0:8])
+    #target position stored at the end
     target_pos1 = np.array(data.data[8:])
-    target_pos2 = pos2[8:]
-      
+    target_pos2 = pos2[8:]   
+    #use above defined functions to calculate position in meters relative to blue blob   
     pos_cam1,target_cam1 = self.get_projection(blob_pos1,target_pos1,5/134.)
     pos_cam2,target_cam2 = self.get_projection(blob_pos2,target_pos2,5/132.)
     self.x_measured = self.blobs_measured(pos_cam1,pos_cam2)
     self.target_measured = self.target_measure(target_cam1,target_cam2)
 
-    #define desired joint angles
-    self.q_d = [0.1,3,0.1,20]		#move robot here
-    
+    #prepare publishing measured target position
+    self.spherex=Float64()
+    self.spherex.data=self.target_measured[0]
+    self.spherey=Float64()
+    self.spherey.data=self.target_measured[1]
+    self.spherez=Float64()
+    self.spherez.data=self.target_measured[2]
+    #Correct error when sphere is hidden by target
+    #Assume that the first value of sphere isn't less than -1
+    if self.spherex.data<-1:
+       self.spherex.data = self.spherex_reserve
+    else:
+       self.spherex_reserve = self.spherex.data
+
+    if self.spherey.data <-1:
+       self.spherey.data = self.spherey_reserve
+    else:
+       self.spherey_reserve = self.spherey.data
+ 
+    if self.spherez.data <-1:
+       self.spherez.data = self.spherez_reserve
+    else:
+       self.spherez_reserve = self.spherez.data
+
+    pos_d = np.array([self.spherex.data,self.spherey.data,self.spherez.data])
+    pos = self.x_measured[3]
+
+  #_____________Perform control or joint angle measurement________________
+    if control:
+      self.q_d = self.control_closed(pos_d,pos,self.q_d)
+    else:
+      theta_measured = self.measure_angle()
+      self.joint1m=Float64()
+      self.joint1m.data= theta_measured[0]
+      self.joint2m=Float64()
+      self.joint2m.data= theta_measured[1]
+      self.joint3m=Float64()
+      self.joint3m.data= theta_measured[2]
+      self.joint4m=Float64()
+      self.joint4m.data= theta_measured[3]
+
+      #________SET TO DESIRED VALUE TO TEST FIRST PART____
+      self.q_d = np.array([0.1,0.2,0.3,0.4])
+      print("---set 'control' to TRUE for control!---")
+      print("desired joint angles:\t\t{}".format(self.q_d))
+      print("measured joint angles:\t\t{}\n".format(theta_measured))
+
     #prepare publishing desired joint angles
     self.joint1=Float64()
     self.joint1.data= self.q_d[0]
@@ -335,50 +439,14 @@ class image_converter:
     self.joint3.data= self.q_d[2]
     self.joint4=Float64()
     self.joint4.data= self.q_d[3]
-   
-    #prepare publishing measured joint angles
-    theta_measured = self.measure_angle()
-    self.joint1m=Float64()
-    self.joint1m.data= theta_measured[0]
-    self.joint2m=Float64()
-    self.joint2m.data= theta_measured[1]
-    self.joint3m=Float64()
-    self.joint3m.data= theta_measured[2]
-    self.joint4m=Float64()
-    self.joint4m.data= theta_measured[3]
 
-    #prepare publishing measured target position
-    self.spherex=Float64()
-    self.spherex.data=self.target_measured[0]
-    self.spherey=Float64()
-    self.spherey.data=self.target_measured[1]
-    self.spherez=Float64()
-    self.spherez.data=self.target_measured[2]
-
-    #Correct error when sphere is hidden by target
-    #Assume that the first value of sphere isn't less than -1
-    if self.spherex.data<-1:
-       self.spherex.data = spherex_reserve
-    else:
-       spherex_reserve = self.spherex.data
-
-    if self.spherey.data <-1:
-       self.spherey.data = spherey_reserve
-    else:
-       spherey_reserve = self.spherey.data
- 
-    if self.spherez.data <-1:
-       self.spherez.data = spherez_reserve
-    else:
-       spherez_reserve = self.spherez.data
-
-    #several results for testing
-    '''print("desired:\t{}".format(self.q_d))
-    print("numerical:\t{}".format(theta_measured))
-    print(self.func_min(self.q_d[:-1]))
-    print(self.func_min(theta_measured[:-1]))
-    print(self.pos_red_blob_ana(*self.q_d))
-    print(self.pos_red_blob(self.pos_green_blob(*self.q_d[0:-1]),*self.q_d))'''
+    #prepare publishing end-effector position
+    self.end_effector_x=Float64()
+    self.end_effector_x.data = pos[0]
+    self.end_effector_y=Float64()
+    self.end_effector_y.data = pos[1]
+    self.end_effector_z=Float64()
+    self.end_effector_z.data = pos[2]
 
     #publish results
     try: 
@@ -386,13 +454,17 @@ class image_converter:
       self.robot_joint2_pub.publish(self.joint2)
       self.robot_joint3_pub.publish(self.joint3)
       self.robot_joint4_pub.publish(self.joint4)
-      self.robot_joint1_measured.publish(self.joint1m)
-      self.robot_joint2_measured.publish(self.joint2m)
-      self.robot_joint3_measured.publish(self.joint3m)
-      self.robot_joint4_measured.publish(self.joint4m)
       self.target_xpos.publish(self.spherex)
       self.target_ypos.publish(self.spherey)
       self.target_zpos.publish(self.spherez)
+      self.end_effector_xpos.publish(self.end_effector_x)
+      self.end_effector_ypos.publish(self.end_effector_y)
+      self.end_effector_zpos.publish(self.end_effector_z)
+      if not control:
+        self.robot_joint1_measured.publish(self.joint1m)
+        self.robot_joint2_measured.publish(self.joint2m)
+        self.robot_joint3_measured.publish(self.joint3m)
+        self.robot_joint4_measured.publish(self.joint4m)
     except CvBridgeError as e:
       print(e)
 

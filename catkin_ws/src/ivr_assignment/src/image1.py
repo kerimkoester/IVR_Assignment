@@ -77,46 +77,44 @@ class image_converter:
 
  #________________Target Detection______________________________________________
 
+
   def detectTarget(self, sourceImg):
-    self.getSphere(sourceImg)
-    return (self.findCenter(self.sphere))
-
-  #use color threshhold to segment target
-  def detectOrange(self, sourceImg):
+    #segment target using color threshold
     targetImg = cv2.inRange(sourceImg,(10,10,120),(100,255,255))
-    return targetImg
-
-  #get contours of the orange objects
-  def contours(self, sourceImg):
-    targetImg = self.detectOrange(sourceImg)
+    
+    #get contours of the orange objects
     img = cv2.bitwise_not(targetImg)
     contours, hierarchy = cv2.findContours(img, 1, 2)
 
     self.cnt1 = contours[0]
     self.cnt2 = contours[1]
 
+    #display the contour of a sphere
+    if isinstance(self.compareCnts(),float):
+      return np.array([-1.5,-1.5])
+    else:
+      self.sphere = cv2.inRange(sourceImg,(100,100,100),(101,101,101))
+      cv2.drawContours(self.sphere,[self.compareCnts()],0,(255,0,255),1)
+      return self.findCenter(self.sphere)
+    
 
   #calculate the circularity of each contour
   def getCircularity(self,cnt):
     perimeter = cv2.arcLength(cnt, True)
     area = cv2.contourArea(cnt)
-    
-    return (4*math.pi*area)/(perimeter**2)
+    if perimeter == 0:
+      return np.nan
+    else:
+      return (4*math.pi*area)/(perimeter**2)
 
   #compares two contour and returns the one that is less circular
   def compareCnts(self):
+    if np.isnan(self.getCircularity(self.cnt1)) or np.isnan(self.getCircularity(self.cnt2)):
+      return np.nan
     if self.getCircularity(self.cnt1)>self.getCircularity(self.cnt2):
       return self.cnt1
     else:
       return self.cnt2
-
-  #display the contour of a sphere
-  def getSphere(self, sourceImg):
-    self.contours(sourceImg)
-    
-    self.sphere = cv2.inRange(sourceImg,(100,100,100),(101,101,101))
-    cv2.drawContours(self.sphere,[self.compareCnts()],0,(255,0,255),1)
-    #cv2.imshow('box',self.sphere)
 
   #findCenter of the contour
   def findCenter(self, cnt):
@@ -145,7 +143,7 @@ class image_converter:
     self.blob_pos1.data=np.array([self.detect_yellow(self.cv_image1),self.detect_blue(self.cv_image1),
 				  self.detect_green(self.cv_image1),self.detect_red(self.cv_image1),self.orange_sphere1]).flatten()
 
-    cv2.imwrite('cam1.png',self.cv_image1)
+    #cv2.imwrite('cam1.png',self.cv_image1)
     #Publish the results
     try: 
       self.image_pub1.publish(self.bridge.cv2_to_imgmsg(self.cv_image1, "bgr8"))
