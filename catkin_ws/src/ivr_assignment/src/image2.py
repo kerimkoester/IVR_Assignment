@@ -18,10 +18,39 @@ class image_converter:
 
   # Defines publisher and subscriber
   def __init__(self):
+#____________________________________________________________________________________
+
+
+    #___________________SET TO TRUE TO ENABLE CONTROL______________________
+    #_____________SET TO FALSE FOR FIRST PART OF ASSIGNMENT________________
+    self.CONTROL = False
+
+    #_____________SET TO TRUE FOR USING THE MEASURED ANGLES________________
+    self.CONTROL_MEASURED_ANGLES = False
+
+    #___________________SET VALUE OF DESIRED ANGLES________________________
+    '''
+    this is either the start value where the control is initialized or
+    the desired angle when self.CONTROL is set to False.
+    '''
+    self.q_d = np.array([0.1,0.1,0.1,0.1])
+
+    #____________________SET CONTROL PARAMETERS____________________________
+    # P gain
+    self.K_p = np.array([[0.9,0,0],[0,0.9,0],[0,0,0.9]])
+    # D gain
+    self.K_d = np.array([[0,0,0],[0,0,0],[0,0,0]])
+
+
+#_____________________________________________________________________________________
+
     # initialize the node named image_processing
     rospy.init_node('image2', anonymous=True)
     # initialize a publisher to send images from camera2 to a topic named image_topic2
     self.bridge = CvBridge()
+
+    self.blob_pos2=Float64MultiArray()
+    self.blob_pos2.data = np.array([0,0,0,0,0,0,0,0,0,0])
     #scale (projection in plane parallel to camera through yellow blob) determined for all angles=0
     self.image_pub2 = rospy.Publisher("image_topic2",Image, queue_size = 1)
     # initialize a subscriber to recieve messages rom a topic named /robot/camera1/image_raw and use callback function to recieve data
@@ -60,7 +89,6 @@ class image_converter:
     # initialize error and derivative of error for trajectory tracking  
     self.error = np.array([0.0,0.0,0.0], dtype='float64')  
     self.error_d = np.array([0.0,0.0,0.0], dtype='float64')
-    self.q_d = np.array([0.1,0.1,0.1,0.1])
 
     
 
@@ -306,10 +334,6 @@ class image_converter:
     return J
 
   def control_closed(self,pos_d,pos,q):
-    # P gain
-    K_p = np.array([[0.9,0,0],[0,0.9,0],[0,0,0.9]])
-    # D gain
-    K_d = np.array([[0,0,0],[0,0,0],[0,0,0]])
     # estimate time step
     cur_time = np.array([rospy.get_time()])
     dt = cur_time - self.time_previous_step
@@ -320,7 +344,7 @@ class image_converter:
     self.error = pos_d-pos
     #print(self.error)
     J_inv = np.linalg.pinv(self.Jacobian(q))  # calculating the psudeo inverse of Jacobian
-    dq_d =np.dot(J_inv, ( np.dot(K_d,self.error_d.transpose()) + np.dot(K_p,self.error.transpose()) ) )  # control input (angular velocity of joints)
+    dq_d =np.dot(J_inv, ( np.dot(self.K_d,self.error_d.transpose()) + np.dot(self.K_p,self.error.transpose()) ) )  # control input (angular velocity of joints)
     q_d = q + (dt * dq_d)  # control input (angular position of joints)
     return q_d
 
@@ -340,11 +364,11 @@ class image_converter:
     #pixel position of blobs and sphere all published on one topic in one array
     self.blob_pos2=Float64MultiArray()
     self.blob_pos2.data=np.array([self.detect_yellow(self.cv_image2),self.detect_blue(self.cv_image2),self.detect_green(self.cv_image2),self.detect_red(self.cv_image2),self.orange_sphere2]).flatten()
-    '''
-    im2=cv2.imshow('window2', self.cv_image2)
-    cv2.waitKey(1)
+    
+    #im2=cv2.imshow('window2', self.cv_image2)
+    #cv2.waitKey(1)
     #cv2.imwrite('cam2.png',self.cv_image2)
-    '''
+    
 
     #Publish pixel position of blobs and sphere
     try: 
@@ -359,9 +383,7 @@ class image_converter:
   def callbackmaster(self,data):
 
 
-    #___________________SET TO TRUE TO ENABLE CONTROL______________________
-    #_____________SET TO FALSE FOR FIRST PART OF ASSIGNMENT________________
-    control = False
+
 
 
     #get the blob positions relative to the blue blob (blue at (0,0,0))
@@ -407,12 +429,16 @@ class image_converter:
     else:
        self.spherez_reserve = self.spherez.data
 
-    pos_d = np.array([self.spherex.data,self.spherey.data,self.spherez.data])
-    pos = self.x_measured[3]
 
   #_____________Perform control or joint angle measurement________________
-    if control:
-      self.q_d = self.control_closed(pos_d,pos,self.q_d)
+    pos_d = np.array([self.spherex.data,self.spherey.data,self.spherez.data])
+    pos = self.x_measured[3]
+    if self.CONTROL:
+      if self.CONTROL_MEASURED_ANGLES:
+        theta_measured = self.measure_angle()
+        self.q_d = self.control_closed(pos_d,pos,theta_measured)
+      else:
+        self.q_d = self.control_closed(pos_d,pos,self.q_d)
     else:
       theta_measured = self.measure_angle()
       self.joint1m=Float64()
@@ -423,10 +449,8 @@ class image_converter:
       self.joint3m.data= theta_measured[2]
       self.joint4m=Float64()
       self.joint4m.data= theta_measured[3]
-
-      #________SET TO DESIRED VALUE TO TEST FIRST PART____
-      self.q_d = np.array([0.1,0.2,0.3,0.4])
-      print("---set 'control' to TRUE for control!---")
+      #output for testing angle measurement
+      print("---set 'self.CONTROL' to True for control!---")
       print("desired joint angles:\t\t{}".format(self.q_d))
       print("measured joint angles:\t\t{}\n".format(theta_measured))
 
@@ -460,7 +484,7 @@ class image_converter:
       self.end_effector_xpos.publish(self.end_effector_x)
       self.end_effector_ypos.publish(self.end_effector_y)
       self.end_effector_zpos.publish(self.end_effector_z)
-      if not control:
+      if not self.CONTROL:
         self.robot_joint1_measured.publish(self.joint1m)
         self.robot_joint2_measured.publish(self.joint2m)
         self.robot_joint3_measured.publish(self.joint3m)
