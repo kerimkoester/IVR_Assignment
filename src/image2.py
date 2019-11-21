@@ -23,7 +23,7 @@ class image_converter:
 
     #___________________SET TO TRUE TO ENABLE CONTROL______________________
     #_____________SET TO FALSE FOR FIRST PART OF ASSIGNMENT________________
-    self.CONTROL = True
+    self.CONTROL = False
 
     #_____________SET TO TRUE FOR USING THE MEASURED ANGLES________________
     self.CONTROL_MEASURED_ANGLES = False
