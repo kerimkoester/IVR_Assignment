@@ -22,7 +22,6 @@ class image_converter:
 
 
     #___________________SET TO TRUE TO ENABLE CONTROL______________________
-    #_____________SET TO FALSE FOR FIRST PART OF ASSIGNMENT________________
     self.CONTROL = False
 
     #_____________SET TO TRUE FOR USING THE MEASURED ANGLES________________
@@ -441,6 +440,7 @@ class image_converter:
         self.q_d = self.control_closed(pos_d,pos,self.q_d)
     else:
       theta_measured = self.measure_angle()
+      pos_theo = self.pos_red_blob_ana(*self.q_d)
       self.joint1m=Float64()
       self.joint1m.data= theta_measured[0]
       self.joint2m=Float64()
@@ -449,10 +449,13 @@ class image_converter:
       self.joint3m.data= theta_measured[2]
       self.joint4m=Float64()
       self.joint4m.data= theta_measured[3]
-      #output for testing angle measurement
+      #output for testing angle measurement and FK
       print("---set 'self.CONTROL' to True for control!---")
       print("desired joint angles:\t\t{}".format(self.q_d))
-      print("measured joint angles:\t\t{}\n".format(theta_measured))
+      print("measured joint angles:\t\t{}".format(theta_measured))
+      print("FK position:\t\t\t{}".format(pos_theo))
+      print("measured position:\t\t{}\n".format(pos))
+      
 
     #prepare publishing desired joint angles
     self.joint1=Float64()
